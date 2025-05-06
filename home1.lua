@@ -26,47 +26,42 @@ local function safeDown()
     end
 end
 
--- Функция для постройки одного этажа
-local function buildFloor(width, depth)
-    for z = 1, depth do
-        for x = 1, width do
+-- Функция для постройки одной стены
+local function buildWall(length, height)
+    for h = 1, height do
+        for l = 1, length do
             placeBlock()
-            if x < width then
+            if l < length then
                 safeForward()
             end
         end
-        if z < depth then
-            if z % 2 == 1 then
-                turtle.turnRight()
+        if h < height then
+            safeUp()
+            turtle.turnRight()
+            turtle.turnRight()
+            for l = 1, length - 1 do
                 safeForward()
-                turtle.turnRight()
-            else
-                turtle.turnLeft()
-                safeForward()
-                turtle.turnLeft()
             end
+            turtle.turnRight()
+            turtle.turnRight()
         end
     end
-    -- Возвращаемся к начальной позиции
-    if depth % 2 == 1 then
+end
+
+-- Функция для постройки прямоугольной коробки (4 стены)
+local function buildBox(width, depth, height)
+    for i = 1, 2 do
+        buildWall(width, height)
         turtle.turnRight()
-        for i = 1, width - 1 do
-            safeForward()
-        end
+        buildWall(depth, height)
         turtle.turnRight()
-    else
-        for i = 1, depth - 1 do
-            safeForward()
-        end
-        turtle.turnLeft()
-        turtle.turnLeft()
     end
 end
 
 -- Основная функция для постройки дома
 local function buildHouse(floors, width, depth, floorHeight)
     for floor = 1, floors do
-        buildFloor(width, depth)
+        buildBox(width, depth, floorHeight)
         if floor < floors then
             for i = 1, floorHeight do
                 safeUp()
