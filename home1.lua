@@ -1,62 +1,81 @@
 -- Функция для размещения блока черепашкой
 local function placeBlock()
-    if turtle.detectDown() then
-        return
-    end
     while not turtle.placeDown() do
         turtle.select((turtle.getSelectedSlot() % 16) + 1)
     end
 end
 
+-- Функция для перемещения черепашки вперед с проверкой препятствий
+local function safeForward()
+    while not turtle.forward() do
+        turtle.dig()
+    end
+end
+
+-- Функция для перемещения черепашки вверх с проверкой препятствий
+local function safeUp()
+    while not turtle.up() do
+        turtle.digUp()
+    end
+end
+
+-- Функция для перемещения черепашки вниз с проверкой препятствий
+local function safeDown()
+    while not turtle.down() do
+        turtle.digDown()
+    end
+end
+
 -- Функция для постройки одного этажа
-local function buildFloor(width, depth, height)
-    for y = 1, height do
-        for z = 1, depth do
-            for x = 1, width do
-                placeBlock()
-                if x < width then
-                    turtle.forward()
-                end
-            end
-            if z < depth then
-                if z % 2 == 1 then
-                    turtle.turnRight()
-                    turtle.forward()
-                    turtle.turnRight()
-                else
-                    turtle.turnLeft()
-                    turtle.forward()
-                    turtle.turnLeft()
-                end
+local function buildFloor(width, depth)
+    for z = 1, depth do
+        for x = 1, width do
+            placeBlock()
+            if x < width then
+                safeForward()
             end
         end
-        -- Возвращаемся к началу уровня
-        if depth % 2 == 1 then
-            turtle.turnRight()
-            for i = 1, width - 1 do
-                turtle.forward()
-            end
-            turtle.turnRight()
-        else
-            for i = 1, depth - 1 do
-                turtle.forward()
+        if z < depth then
+            if z % 2 == 1 then
+                turtle.turnRight()
+                safeForward()
+                turtle.turnRight()
+            else
+                turtle.turnLeft()
+                safeForward()
+                turtle.turnLeft()
             end
         end
-        if y < height then
-            turtle.up()
+    end
+    -- Возвращаемся к начальной позиции
+    if depth % 2 == 1 then
+        turtle.turnRight()
+        for i = 1, width - 1 do
+            safeForward()
         end
+        turtle.turnRight()
+    else
+        for i = 1, depth - 1 do
+            safeForward()
+        end
+        turtle.turnLeft()
+        turtle.turnLeft()
     end
 end
 
 -- Основная функция для постройки дома
 local function buildHouse(floors, width, depth, floorHeight)
     for floor = 1, floors do
-        buildFloor(width, depth, floorHeight)
+        buildFloor(width, depth)
         if floor < floors then
             for i = 1, floorHeight do
-                turtle.up()
+                safeUp()
             end
         end
+    end
+    -- Возвращаемся вниз после постройки дома
+    for i = 1, (floors - 1) * floorHeight do
+        safeDown()
     end
 end
 
