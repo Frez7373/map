@@ -1,0 +1,70 @@
+-- Получаем периферийное устройство монитора
+local monitor = peripheral.find("monitor")
+if not monitor then
+    print("Монитор не найден!")
+    return
+end
+
+-- Настройка монитора
+monitor.setTextScale(0.5) -- Уменьшаем масштаб текста
+monitor.clear()
+monitor.setBackgroundColor(colors.black)
+monitor.setTextColor(colors.white)
+
+-- Определяем дни недели
+local daysOfWeek = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
+
+-- Функция для определения дня недели
+local function getDayOfWeek(day)
+    return daysOfWeek[(day - 1) % 7 + 1]
+end
+
+-- Функция форматирования времени
+local function formatTime(hour, minute)
+    return string.format("%02d:%02d", hour, minute)
+end
+
+-- Основная функция для отображения календаря и времени
+local function displayCalendarAndTime()
+    while true do
+        -- Получаем текущий день в игре
+        local day = os.day()
+        local dayOfWeek = getDayOfWeek(day)
+
+        -- Определяем текущий месяц и день месяца
+        local totalDaysInMonth = 30
+        local month = math.ceil(day / totalDaysInMonth)
+        local dayOfMonth = day % totalDaysInMonth
+        if dayOfMonth == 0 then dayOfMonth = totalDaysInMonth end
+
+        -- Получаем текущее время
+        local time = os.time()
+        local hour = math.floor(time)
+        local minute = math.floor((time - hour) * 60)
+        local formattedTime = formatTime(hour, minute)
+
+        -- Получаем размеры монитора
+        local width, height = monitor.getSize()
+
+        -- Очищаем монитор
+        monitor.clear()
+
+        -- Отображаем календарь в верхней части
+        monitor.setCursorPos(1, 1)
+        monitor.write(string.format("Month: %d", month))
+        monitor.setCursorPos(1, 2)
+        monitor.write(string.format("Day: %d (%s)", dayOfMonth, dayOfWeek))
+
+        -- Отображаем время в нижней части, центрируя его
+        local x = math.ceil((width - #formattedTime) / 2)
+        local y = height -- Последняя строка монитора
+        monitor.setCursorPos(x, y)
+        monitor.write(formattedTime)
+
+        -- Обновляем каждые 10 секунд
+        sleep(10)
+    end
+end
+
+-- Запуск отображения
+displayCalendarAndTime()
