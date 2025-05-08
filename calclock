@@ -61,8 +61,8 @@ local function displayCalendarAndTime()
         monitor.setCursorPos(x, y)
         monitor.write(formattedTime)
 
-        -- Обновляем каждые 10 секунд
-        sleep(10)
+        -- Обновляем каждые 1 секунду
+        sleep(1)
     end
 end
 
