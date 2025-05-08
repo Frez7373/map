@@ -1,0 +1,42 @@
+local monitor = peripheral.find("monitor") -- Ищем подключённый монитор
+if not monitor then
+    print("Монитор не найден!")
+    return
+end
+
+monitor.setTextScale(1) -- Настраиваем масштаб текста
+monitor.clear() -- Очищаем экран
+monitor.setBackgroundColor(colors.black)
+monitor.setTextColor(colors.white)
+
+local function formatTime(hour, minute)
+    return string.format("%02d:%02d", hour, minute)
+end
+
+local function displayTime()
+    while true do
+        -- Получаем размеры монитора
+        local width, height = monitor.getSize()
+
+        -- Получаем текущее время в игровом формате
+        local time = os.time() -- Возвращает время с рассвета (0 = рассвет, 6 = полдень)
+        local hour = math.floor(time) -- Целая часть времени = часы
+        local minute = math.floor((time - hour) * 60) -- Остаток = минуты
+
+        -- Подготовка времени к выводу
+        local formattedTime = formatTime(hour, minute)
+
+        -- Вычисляем позицию для центрирования текста
+        local x = math.ceil((width - #formattedTime) / 2) -- Центр по горизонтали
+        local y = math.ceil(height / 2) -- Центр по вертикали
+
+        -- Отображение времени на мониторе
+        monitor.clear()
+        monitor.setCursorPos(x, y)
+        monitor.write(formattedTime)
+
+        sleep(1) -- Обновляем раз в секунду
+    end
+end
+
+displayTime()
