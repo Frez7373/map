@@ -1,0 +1,113 @@
+-- SERVER CODE
+local MODEM_SIDE = "top" -- Change to the side your modem is on
+local ACCOUNTS_FILE = "accounts.txt"
+
+-- Initialize Rednet
+rednet.open(MODEM_SIDE)
+rednet.host("cloud_disk", "main_server")
+print("[-] Cloud Disk Server started...")
+
+-- Load or create accounts database
+local accounts = {}
+if fs.exists(ACCOUNTS_FILE) then
+    local file = fs.open(ACCOUNTS_FILE, "r")
+    accounts = textutils.unserialize(file.readAll()) or {}
+    file.close()
+else
+    local file = fs.open(ACCOUNTS_FILE, "w")
+    file.write(textutils.serialize(accounts))
+    file.close()
+end
+
+local function saveAccounts()
+    local file = fs.open(ACCOUNTS_FILE, "w")
+    file.write(textutils.serialize(accounts))
+    file.close()
+end
+
+-- Find available storage (attached disk drives)
+local function getUserPath(username)
+    -- Look for any attached disk drive
+    local peripherals = peripheral.getNames()
+    for _, name in ipairs(peripherals) do
+        if peripheral.getType(name) == "drive" and disk.isPresent(name) then
+            local mountPath = disk.getMountPath(name)
+            if mountPath then
+                return mountPath .. "/user_" .. username
+            end
+        end
+    end
+    -- Fallback to local storage if no disks are found
+    return "cloud_storage/user_" .. username
+end
+
+-- Main server loop
+while true do
+    local id, message = rednet.receive("cloud_disk")
+    
+    if type(message) == "table" and message.action then
+        local action = message.action
+        local user = message.username
+        local pass = message.password
+
+        print("[+] Received request: " .. action .. " from user: " .. tostring(user))
+
+        -- Handle Registration
+        if action == "register" then
+            if accounts[user] then
+                rednet.send(id, {success = false, error = "User already exists"}, "cloud_disk")
+            else
+                accounts[user] = pass
+                saveAccounts()
+                local path = getUserPath(user)
+                fs.makeDir(path)
+                rednet.send(id, {success = true, msg = "Registered successfully"}, "cloud_disk")
+            end
+
+        -- Authenticate for other actions
+        elseif accounts[user] and accounts[user] == pass then
+            local userPath = getUserPath(user)
+            
+            if action == "list" then
+                if fs.exists(userPath) then
+                    rednet.send(id, {success = true, files = fs.list(userPath)}, "cloud_disk")
+                else
+                    rednet.send(id, {success = false, error = "Storage error"}, "cloud_disk")
+                end
+
+            elseif action == "upload" then
+                local filePath = userPath .. "/" .. message.filename
+                local file = fs.open(filePath, "w")
+                if file then
+                    file.write(message.content)
+                    file.close()
+                    rednet.send(id, {success = true, msg = "Uploaded successfully"}, "cloud_disk")
+                else
+                    rednet.send(id, {success = false, error = "Cannot write file"}, "cloud_disk")
+                end
+
+            elseif action == "download" then
+                local filePath = userPath .. "/" .. message.filename
+                if fs.exists(filePath) and not fs.isDir(filePath) then
+                    local file = fs.open(filePath, "r")
+                    local content = file.readAll()
+                    file.close()
+                    rednet.send(id, {success = true, content = content}, "cloud_disk")
+                else
+                    rednet.send(id, {success = false, error = "File not found"}, "cloud_disk")
+                end
+
+            elseif action == "delete" then
+                local filePath = userPath .. "/" .. message.filename
+                if fs.exists(filePath) then
+                    fs.delete(filePath)
+                    rednet.send(id, {success = true, msg = "Deleted successfully"}, "cloud_disk")
+                else
+                    rednet.send(id, {success = false, error = "File not found"}, "cloud_disk")
+                end
+            end
+        else
+            rednet.send(id, {success = false, error = "Invalid username or password"}, "cloud_disk")
+        end
+    end
+end
