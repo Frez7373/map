@@ -1,0 +1,49 @@
+-- Код для работы с ОДНИМ GPS-маяком строго снизу/сверху
+local TARGET_HEIGHT = 100
+local SIDE_OUTPUT = "top"
+local CHECK_INTERVAL = 1
+
+-- Введите координаты вашего единственного маяка снизу
+local BEACON_Y = 60 
+
+-- Открываем модем (замените "right" на сторону вашего модема)
+local modem = peripheral.find("modem") or error("No modem found")
+modem.open(os.getComputerID())
+
+print("Single-beacon height monitor started...")
+
+while true do
+    -- Отправляем запрос
+    modem.transmit(3, os.getComputerID(), { command = "ping" })
+    
+    -- Ждем ответ 0.5 секунды
+    local timer = os.startTimer(0.5)
+    local y = nil
+    
+    while true do
+        local event, side, channel, replyChannel, message, distance = os.pullEvent()
+        if event == "modem_message" and type(message) == "table" and message.command == "pong" then
+            -- Если маяк строго под нами, то расстояние до него + его Y = наша высота
+            if distance then
+                y = math.floor(BEACON_Y + distance + 0.5)
+                break
+            end
+        elseif event == "timer" and side == timer then
+            break
+        end
+    end
+
+    if not y then
+        print("Error: Beacon not responding.")
+    else
+        print("Calculated Y: " .. y)
+
+        if y > TARGET_HEIGHT then
+            redstone.setOutput(SIDE_OUTPUT, true)
+        else
+            redstone.setOutput(SIDE_OUTPUT, false)
+        end
+    end
+
+    sleep(CHECK_INTERVAL)
+end
