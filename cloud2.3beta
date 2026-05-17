@@ -1,0 +1,288 @@
+-- OPUS OS GRAPHICAL CLOUD CLIENT
+local UI       = require('opus.ui')
+local Util     = require('opus.util')
+
+local MODEM_SIDE = "top" -- Change to your modem side
+rednet.open(MODEM_SIDE)
+
+local serverID = rednet.lookup("cloud_disk", "main_server")
+if not serverID then
+    error("Cloud Server not found! Make sure the server computer is running.")
+end
+
+-- Global Session Data
+local session = {
+    username = "",
+    password = "",
+    files = {}
+}
+
+-- Network Helper
+local function sendRequest(action, payload)
+    payload = payload or {}
+    payload.action = action
+    payload.username = session.username
+    payload.password = session.password
+    
+    rednet.send(serverID, payload, "cloud_disk")
+    local _, response = rednet.receive("cloud_disk", 4)
+    return response
+end
+
+-- Main Application Window
+local app = UI.Application({
+    backgroundColor = colors.gray
+})
+
+-- Forward Declarations of Screens
+local showLoginScreen, showMainScreen
+
+-- 1. LOGIN SCREEN SCREEN DEFINITION
+showLoginScreen = function()
+    local loginPage = UI.Window({
+        parent = app,
+        x = 1, y = 1, w = app.w, h = app.h,
+        backgroundColor = colors.gray
+    })
+
+    UI.Label({
+        parent = loginPage,
+        x = 3, y = 2,
+        textColor = colors.yellow,
+        text = "MC Google Drive - Opus OS Client"
+    })
+
+    local userInp = UI.TextEntry({
+        parent = loginPage,
+        x = 3, y = 5, w = app.w - 6,
+        shadowText = "Username"
+    })
+
+    local passInp = UI.TextEntry({
+        parent = loginPage,
+        x = 3, y = 8, w = app.w - 6,
+        shadowText = "Password",
+        mask = "*"
+    })
+
+    local statusLbl = UI.Label({
+        parent = loginPage,
+        x = 3, y = 11, w = app.w - 6,
+        textColor = colors.lightGray,
+        text = ""
+    })
+
+    -- Login Button Action
+    UI.Button({
+        parent = loginPage,
+        x = 3, y = 13, w = 12,
+        text = "Login",
+        backgroundColor = colors.blue,
+        textColor = colors.white,
+        event = "action",
+        handler = function()
+            if userInp:getValue() == "" or passInp:getValue() == "" then
+                statusLbl:setText("Fields cannot be empty!")
+                return
+            end
+            
+            session.username = userInp:getValue()
+            session.password = passInp:getValue()
+            
+            statusLbl:setText("Connecting...")
+            loginPage:draw()
+
+            local res = sendRequest("list")
+            if res and res.success then
+                session.files = res.files or {}
+                loginPage:unmount()
+                showMainScreen()
+            else
+                statusLbl:setText(res and res.error or "Server timeout")
+            end
+        end
+    })
+
+    -- Register Button Action
+    UI.Button({
+        parent = loginPage,
+        x = 17, y = 13, w = 12,
+        text = "Register",
+        backgroundColor = colors.cyan,
+        textColor = colors.white,
+        event = "action",
+        handler = function()
+            session.username = userInp:getValue()
+            session.password = passInp:getValue()
+            
+            statusLbl:setText("Registering...")
+            loginPage:draw()
+
+            local res = sendRequest("register")
+            if res and res.success then
+                statusLbl:setText("Success! Click Login.")
+            else
+                statusLbl:setText(res and res.error or "Reg failed")
+            end
+        end
+    })
+end
+
+-- 2. MAIN EXPLORER SCREEN DEFINITION
+showMainScreen = function()
+    local mainPage = UI.Window({
+        parent = app,
+        x = 1, y = 1, w = app.w, h = app.h,
+        backgroundColor = colors.gray
+    })
+
+    -- Top bar
+    UI.TitleBar({
+        parent = mainPage,
+        title = "Cloud: " .. session.username,
+        backgroundColor = colors.blue,
+        textColor = colors.white
+    })
+
+    -- Files List (Grid Component)
+    local fileGrid = UI.Grid({
+        parent = mainPage,
+        x = 2, y = 3, w = app.w - 16, h = app.h - 3,
+        columns = {
+            { heading = "Cloud Filename", key = "name" }
+        }
+    })
+
+    -- Helper to refresh grid list
+    local function refreshGrid()
+        local listData = {}
+        for _, v in ipairs(session.files) do
+            table.insert(listData, { name = v })
+        end
+        fileGrid:setValues(listData)
+    end
+    refreshGrid()
+
+    -- Status Notification bar at bottom
+    local notifyBar = UI.StatusBar({
+        parent = mainPage,
+        values = { "Connected to server" }
+    })
+
+    -- Right Sidebar Buttons
+    UI.Button({
+        parent = mainPage,
+        x = app.w - 13, y = 4, w = 12,
+        text = "Upload",
+        backgroundColor = colors.green,
+        handler = function()
+            -- Prompt using Opus OS text input popup dialog if available, 
+            -- or a simple terminal entry fallback
+            notifyBar:setValue(1, "Enter local filename...")
+            mainPage:draw()
+            
+            -- Simple input overlay within app
+            local entry = UI.TextEntry({
+                parent = mainPage,
+                x = 2, y = app.h - 3, w = app.w - 16,
+                shadowText = "type local file to upload + hit enter"
+            })
+            entry:focus()
+            
+            mainPage:draw()
+            
+            -- Block execution until enter is pressed on text entry
+            entry.handler = function(self, event)
+                if event == "accept" then
+                    local localFile = self:getValue()
+                    entry:unmount()
+                    
+                    if fs.exists(localFile) and not fs.isDir(localFile) then
+                        local f = fs.open(localFile, "r")
+                        local content = f.readAll()
+                        f.close()
+                        
+                        local res = sendRequest("upload", { filename = localFile, content = content })
+                        if res and res.success then
+                            notifyBar:setValue(1, "Uploaded successfully!")
+                            -- Reload list
+                            local listRes = sendRequest("list")
+                            if listRes then session.files = listRes.files or {} end
+                            refreshGrid()
+                        else
+                            notifyBar:setValue(1, "Upload failed!")
+                        end
+                    else
+                        notifyBar:setValue(1, "File not found!")
+                    end
+                end
+            end
+        end
+    })
+
+    UI.Button({
+        parent = mainPage,
+        x = app.w - 13, y = 7, w = 12,
+        text = "Download",
+        backgroundColor = colors.cyan,
+        handler = function()
+            local selected = fileGrid:getSelected()
+            if not selected then
+                notifyBar:setValue(1, "Select a file first!")
+                return
+            end
+            
+            notifyBar:setValue(1, "Downloading...")
+            mainPage:draw()
+            
+            local res = sendRequest("download", { filename = selected.name })
+            if res and res.success then
+                local f = fs.open(selected.name, "w")
+                f.write(res.content)
+                f.close()
+                notifyBar:setValue(1, "Saved: " .. selected.name)
+            else
+                notifyBar:setValue(1, "Download failed!")
+            end
+        end
+    })
+
+    UI.Button({
+        parent = mainPage,
+        x = app.w - 13, y = 10, w = 12,
+        text = "Delete",
+        backgroundColor = colors.red,
+        handler = function()
+            local selected = fileGrid:getSelected()
+            if not selected then
+                notifyBar:setValue(1, "Select a file first!")
+                return
+            end
+            
+            local res = sendRequest("delete", { filename = selected.name })
+            if res and res.success then
+                notifyBar:setValue(1, "Deleted file.")
+                local listRes = sendRequest("list")
+                if listRes then session.files = listRes.files or {} end
+                refreshGrid()
+            else
+                notifyBar:setValue(1, "Delete failed!")
+            end
+        end
+    })
+
+    UI.Button({
+        parent = mainPage,
+        x = app.w - 13, y = app.h - 2, w = 12,
+        text = "Exit",
+        backgroundColor = colors.lightGray,
+        textColor = colors.black,
+        handler = function()
+            app:stop()
+        end
+    })
+end
+
+-- Start the App
+showLoginScreen()
+app:run()
