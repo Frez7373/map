@@ -1,0 +1,108 @@
+-- CLIENT CODE
+local MODEM_SIDE = "top" -- Change to the side your modem is on
+
+rednet.open(MODEM_SIDE)
+local serverID = rednet.lookup("cloud_disk", "main_server")
+
+if not serverID then
+    print("Error: Cloud Server not found!")
+    return
+end
+
+print("Connected to Cloud Server (ID: " .. serverID .. ")")
+
+-- Login / Credentials prompt
+write("Username: ")
+local username = read()
+write("Password: ")
+local password = read("*") -- Hide password typing
+
+local function sendRequest(payload)
+    payload.username = username
+    payload.password = password
+    rednet.send(serverID, payload, "cloud_disk")
+    
+    local id, response = rednet.receive("cloud_disk", 5) -- 5 seconds timeout
+    if not response then
+        print("Error: Server timeout.")
+        return nil
+    end
+    return response
+end
+
+-- Help Menu
+local function printHelp()
+    print("\nAvailable commands:")
+    print("register       - Create a new cloud account")
+    print("list           - List your cloud files")
+    print("upload <file>  - Upload a local file to cloud")
+    print("download <file>- Download a file from cloud")
+    print("delete <file>  - Delete a cloud file")
+    print("exit           - Close the program")
+end
+
+printHelp()
+
+while true do
+    write("\n" .. username .. "@cloud> ")
+    local input = read()
+    local parts = {}
+    for word in input:gmatch("%S+") do table.insert(parts, word) end
+    
+    local command = parts[1]
+    local argument = parts[2]
+
+    if command == "exit" then
+        break
+    elseif command == "register" then
+        local res = sendRequest({action = "register"})
+        if res then print(res.success and res.msg or "Error: " .. res.error) end
+
+    elseif command == "list" then
+        local res = sendRequest({action = "list"})
+        if res and res.success then
+            print("--- Your Cloud Files ---")
+            for _, filename in ipairs(res.files) do
+                print("- " .. filename)
+            end
+        elseif res then
+            print("Error: " .. res.error)
+        end
+
+    elseif command == "upload" then
+        if not argument then print("Usage: upload <filename>")
+        elseif not fs.exists(argument) or fs.isDir(argument) then print("Local file does not exist.")
+        else
+            local file = fs.open(argument, "r")
+            local content = file.readAll()
+            file.close()
+
+            local res = sendRequest({action = "upload", filename = argument, content = content})
+            if res then print(res.success and res.msg or "Error: " .. res.error) end
+        end
+
+    elseif command == "download" then
+        if not argument then print("Usage: download <filename>")
+        else
+            local res = sendRequest({action = "download", filename = argument})
+            if res and res.success then
+                local file = fs.open(argument, "w")
+                file.write(res.content)
+                file.close()
+                print("Downloaded " .. argument .. " successfully.")
+            elseif res then
+                print("Error: " .. res.error)
+            end
+        end
+
+    elseif command == "delete" then
+        if not argument then print("Usage: delete <filename>")
+        else
+            local res = sendRequest({action = "delete", filename = argument})
+            if res then print(res.success and res.msg or "Error: " .. res.error) end
+        end
+    else
+        print("Unknown command.")
+        printHelp()
+    end
+end
