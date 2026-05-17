@@ -1,20 +1,17 @@
--- Настройки
 local TARGET_HEIGHT = 100
 local SIDE_OUTPUT = "top"
-local CHECK_INTERVAL = 1 -- Интервал проверки в секундах
+local CHECK_INTERVAL = 1
 
-print("Программа контроля высоты запущена...")
+print("Height monitor started...")
 
 while true do
-    -- Получаем координаты через GPS
     local x, y, z = gps.locate(2)
 
     if not y then
-        print("Ошибка: Не удалось получить GPS-сигнал.")
+        print("Error: GPS signal not found.")
     else
-        print("Текущая высота (Y): " .. y)
+        print("Current Y: " .. y)
 
-        -- Проверяем превышение высоты
         if y > TARGET_HEIGHT then
             redstone.setOutput(SIDE_OUTPUT, true)
         else
