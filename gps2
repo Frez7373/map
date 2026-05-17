@@ -1,0 +1,23 @@
+local TARGET_HEIGHT = 100
+local SIDE_OUTPUT = "top"
+local CHECK_INTERVAL = 1
+
+print("Height monitor started...")
+
+while true do
+    local x, y, z = gps.locate(2)
+
+    if not y then
+        print("Error: GPS signal not found.")
+    else
+        print("Current Y: " .. y)
+
+        if y > TARGET_HEIGHT then
+            redstone.setOutput(SIDE_OUTPUT, true)
+        else
+            redstone.setOutput(SIDE_OUTPUT, false)
+        end
+    end
+
+    sleep(CHECK_INTERVAL)
+end
