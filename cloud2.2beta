@@ -1,0 +1,229 @@
+-- ADVANCED CLIENT CODE (GUI)
+local MODEM_SIDE = "top" -- Change to your modem side
+
+rednet.open(MODEM_SIDE)
+local serverID = rednet.lookup("cloud_disk", "main_server")
+
+if not serverID then
+    term.textColor(colors.red)
+    print("Error: Cloud Server not found!")
+    term.textColor(colors.white)
+    return
+end
+
+local username = ""
+local password = ""
+local w, h = term.getSize()
+
+-- Helper to draw clean background & titles
+local function drawHeader(title)
+    term.setBackgroundColor(colors.gray)
+    term.clear()
+    term.setCursorPos(1, 1)
+    term.setBackgroundColor(colors.blue)
+    term.textColor(colors.white)
+    term.clearLine()
+    print(" " .. title)
+    term.setBackgroundColor(colors.gray)
+end
+
+-- Helper to send rednet requests
+local function sendRequest(payload)
+    payload.username = username
+    payload.password = password
+    rednet.send(serverID, payload, "cloud_disk")
+    local id, response = rednet.receive("cloud_disk", 4)
+    return response
+end
+
+-- Beautiful Input Field
+local function drawInput(y, label, isPassword)
+    term.setCursorPos(4, y)
+    term.textColor(colors.lightGray)
+    print(label)
+    term.setCursorPos(4, y + 1)
+    term.setBackgroundColor(colors.black)
+    term.textColor(colors.white)
+    write(string.rep(" ", w - 8))
+    term.setCursorPos(4, y + 1)
+    
+    local input = ""
+    while true do
+        local event, char = os.pullEvent()
+        if event == "char" then
+            if #input < 20 then
+                input = input .. char
+                if isPassword then write("*") else write(char) end
+            end
+        elseif event == "key" then
+            if char == keys.backspace and #input > 0 then
+                input = input:sub(1, -2)
+                local cx, cy = term.getCursorPos()
+                term.setCursorPos(cx - 1, cy)
+                write(" ")
+                term.setCursorPos(cx - 1, cy)
+            elseif char == keys.enter then
+                break
+            end
+        end
+    end
+    term.setBackgroundColor(colors.gray)
+    return input
+end
+
+-- Notification popup
+local function showPopup(text, isError)
+    term.setBackgroundColor(isError and colors.red or colors.green)
+    term.textColor(colors.white)
+    term.setCursorPos(1, h)
+    term.clearLine()
+    write(" " .. text)
+    sleep(2)
+    term.setBackgroundColor(colors.gray)
+end
+
+-- 1. LOGIN & REGISTER SCREEN
+local function loginScreen()
+    while true do
+        drawHeader("MC Google Drive - Authentication")
+        
+        username = drawInput(4, "Enter Username:")
+        password = drawInput(8, "Enter Password:", true)
+        
+        term.setCursorPos(4, 12)
+        term.textColor(colors.yellow)
+        print("[Enter] Login   |   [R] Register New Account")
+        
+        while true do
+            local event, key = os.pullEvent("key")
+            if key == keys.enter then
+                -- Try listing files to check authentication
+                local res = sendRequest({action = "list"})
+                if res and res.success then
+                    return true -- Login success
+                else
+                    showPopup(res and res.error or "Server error", true)
+                    break
+                end
+            elseif key == keys.r then
+                local res = sendRequest({action = "register"})
+                if res and res.success then
+                    showPopup("Account created! Logging in...", false)
+                    return true
+                else
+                    showPopup(res and res.error or "Registration failed", true)
+                    break
+                end
+            end
+        end
+    end
+end
+
+-- 2. MAIN CLOUD FILE EXPLORER
+local function fileExplorer()
+    local selectedIndex = 1
+    
+    while true do
+        drawHeader("Cloud Storage Explorer (" .. username .. ")")
+        
+        -- Fetch files from server
+        local res = sendRequest({action = "list"})
+        local files = {}
+        if res and res.success then files = res.files end
+        
+        -- Draw Action Bar Sidebar
+        term.setBackgroundColor(colors.lightGray)
+        for i = 2, h do
+            term.setCursorPos(w - 14, i)
+            write(string.rep(" ", 15))
+        end
+        term.textColor(colors.black)
+        term.setCursorPos(w - 12, 3) write("[U] Upload")
+        term.setCursorPos(w - 12, 5) write("[D] Download")
+        term.setCursorPos(w - 12, 7) write("[X] Delete")
+        term.setCursorPos(w - 12, h - 1) write("[E] Exit")
+        
+        -- Draw Files List
+        term.setBackgroundColor(colors.gray)
+        if #files == 0 then
+            term.setCursorPos(2, 4)
+            term.textColor(colors.lightGray)
+            print("Your cloud is empty.")
+        else
+            for i, filename in ipairs(files) do
+                if i + 2 < h then
+                    term.setCursorPos(2, i + 2)
+                    if i == selectedIndex then
+                        term.setBackgroundColor(colors.blue)
+                        term.textColor(colors.white)
+                    else
+                        term.setBackgroundColor(colors.gray)
+                        term.textColor(colors.white)
+                    end
+                    -- Clear width till sidebar
+                    write(filename .. string.rep(" ", (w - 15) - #filename))
+                end
+            end
+        end
+        
+        -- Input handling (Controls)
+        local event, key = os.pullEvent("key")
+        if key == keys.up and selectedIndex > 1 then
+            selectedIndex = selectedIndex - 1
+        elseif key == keys.down and selectedIndex < #files then
+            selectedIndex = selectedIndex + 1
+            
+        elseif key == keys.u then -- UPLOAD ACTION
+            drawHeader("Upload File")
+            local fileToUpload = drawInput(4, "Enter local filename to upload:")
+            if fs.exists(fileToUpload) and not fs.isDir(fileToUpload) then
+                local f = fs.open(fileToUpload, "r")
+                local content = f.readAll()
+                f.close()
+                
+                local uploadRes = sendRequest({action = "upload", filename = fileToUpload, content = content})
+                if uploadRes and uploadRes.success then
+                    showPopup("Successfully uploaded!", false)
+                else
+                    showPopup("Upload failed!", true)
+                end
+            else
+                showPopup("Local file doesn't exist!", true)
+            end
+            
+        elseif key == keys.d and #files > 0 then -- DOWNLOAD ACTION
+            local fileToDownload = files[selectedIndex]
+            local downloadRes = sendRequest({action = "download", filename = fileToDownload})
+            if downloadRes and downloadRes.success then
+                local f = fs.open(fileToDownload, "w")
+                f.write(downloadRes.content)
+                f.close()
+                showPopup("Downloaded: " .. fileToDownload, false)
+            else
+                showPopup("Download failed!", true)
+            end
+            
+        elseif key == keys.x and #files > 0 then -- DELETE ACTION
+            local fileToDelete = files[selectedIndex]
+            local deleteRes = sendRequest({action = "delete", filename = fileToDelete})
+            if deleteRes and deleteRes.success then
+                showPopup("Deleted file.", false)
+                selectedIndex = math.max(1, selectedIndex - 1)
+            else
+                showPopup("Delete failed!", true)
+            end
+            
+        elseif key == keys.e then -- EXIT
+            term.setBackgroundColor(colors.black)
+            term.clear()
+            term.setCursorPos(1,1)
+            print("Thank you for using MC Cloud Disk!")
+            break
+        end
+    end
+end
+
+-- Run application
+if loginScreen() then
+    fileExplorer()
+end
