@@ -1,0 +1,309 @@
+-- SERVER CODE WITH MULTI-DRIVE, QUOTAS, BACKUPS, SHARING & SEARCH
+local MODEM_SIDE = "top" -- Change to your modem side
+local ACCOUNTS_FILE = "accounts.txt"
+local SHARES_FILE = "shares.txt"
+local MAX_USER_QUOTA = 100 * 1024 -- 100 KB limit per user in bytes
+local MAX_BACKUPS = 3
+
+rednet.open(MODEM_SIDE)
+rednet.host("cloud_disk", "main_server")
+print("[-] Enterprise Cloud Server started...")
+
+-- Load Datastores
+local accounts = {}
+if fs.exists(ACCOUNTS_FILE) then
+    local file = fs.open(ACCOUNTS_FILE, "r")
+    accounts = textutils.unserialize(file.readAll()) or {}
+    file.close()
+else
+    local file = fs.open(ACCOUNTS_FILE, "w")
+    file.write(textutils.serialize(accounts))
+    file.close()
+end
+
+local shares = {} -- Format: shares[filename_owner] = {user1, user2...}
+if fs.exists(SHARES_FILE) then
+    local file = fs.open(SHARES_FILE, "r")
+    shares = textutils.unserialize(file.readAll()) or {}
+    file.close()
+else
+    local file = fs.open(SHARES_FILE, "w")
+    file.write(textutils.serialize(shares))
+    file.close()
+end
+
+local function saveAccounts()
+    local file = fs.open(ACCOUNTS_FILE, "w")
+    file.write(textutils.serialize(accounts))
+    file.close()
+end
+
+local function saveShares()
+    local file = fs.open(SHARES_FILE, "w")
+    file.write(textutils.serialize(shares))
+    file.close()
+end
+
+-- Get storage stats across all connected disk drives
+local function getStorageStats()
+    local totalFree = 0
+    local totalCapacity = 0
+    local drives = {}
+    
+    local peripherals = peripheral.getNames()
+    for i = 1, #peripherals do
+        local name = peripherals[i]
+        if peripheral.getType(name) == "drive" and disk.isPresent(name) then
+            local path = disk.getMountPath(name)
+            if path then
+                table.insert(drives, path)
+                totalFree = totalFree + fs.getFreeSpace(path)
+                totalCapacity = totalCapacity + (fs.getFreeSpace(path) + fs.getDriveSize(path))
+            end
+        end
+    end
+    
+    if #drives == 0 then
+        if not fs.exists("cloud_storage") then fs.makeDir("cloud_storage") end
+        totalFree = fs.getFreeSpace("cloud_storage")
+        totalCapacity = totalFree
+        table.insert(drives, "cloud_storage")
+    end
+    
+    return totalFree, totalCapacity, drives
+end
+
+local function findDriveWithSpace(requiredSpace)
+    local _, _, drives = getStorageStats()
+    for i = 1, #drives do
+        local drivePath = drives[i]
+        if fs.getFreeSpace(drivePath) >= requiredSpace then
+            return drivePath
+        end
+    end
+    return nil
+end
+
+-- FIXED: Absolute precise size calculation
+local function getUserUsedSpace(username)
+    local totalUsed = 0
+    local _, _, drives = getStorageStats()
+    for i = 1, #drives do
+        local userFolder = drives[i] .. "/user_" .. username
+        if fs.exists(userFolder) and fs.isDir(userFolder) then
+            local files = fs.list(userFolder)
+            for j = 1, #files do
+                local fullPath = userFolder .. "/" .. files[j]
+                if fs.exists(fullPath) and not fs.isDir(fullPath) then
+                    totalUsed = totalUsed + fs.getSize(fullPath)
+                end
+            end
+        end
+    end
+    return totalUsed
+end
+
+-- Locate file path and return drive folder context
+local function findUserFile(username, filename)
+    local _, _, drives = getStorageStats()
+    for i = 1, #drives do
+        local fullPath = drives[i] .. "/user_" .. username .. "/" .. filename
+        if fs.exists(fullPath) then
+            return fullPath, drives[i] .. "/user_" .. username
+        end
+    end
+    return nil, nil
+end
+
+-- Gather all files plus shared files
+local function getUserFiles(username)
+    local ownFiles = {}
+    local sharedFiles = {}
+    local _, _, drives = getStorageStats()
+    
+    -- Own files
+    for i = 1, #drives do
+        local userFolder = drives[i] .. "/user_" .. username
+        if fs.exists(userFolder) and fs.isDir(userFolder) then
+            local files = fs.list(userFolder)
+            for j = 1, #files do
+                if not string.find(files[j], "%.bak%d+$") then -- hide backups from main list
+                    table.insert(ownFiles, files[j])
+                end
+            end
+        end
+    end
+    
+    -- Scan Shared Files
+    for shareKey, usersAllowed in pairs(shares) do
+        for k = 1, #usersAllowed do
+            if usersAllowed[k] == username then
+                -- key format is "owner:filename"
+                table.insert(sharedFiles, "shared:" .. shareKey)
+            end
+        end
+    end
+    
+    return ownFiles, sharedFiles
+end
+
+-- Handle File Backup Versioning Rotation
+local function rotateBackups(userFolder, filename)
+    local mainFile = userFolder .. "/" .. filename
+    if not fs.exists(mainFile) then return end
+    
+    -- Rotate older backups down the line
+    for i = MAX_BACKUPS - 1, 1, -1 do
+        local oldBak = mainFile .. ".bak" .. i
+        if fs.exists(oldBak) then
+            if fs.exists(mainFile .. ".bak" .. (i+1)) then fs.delete(mainFile .. ".bak" .. (i+1)) end
+            fs.move(oldBak, mainFile .. ".bak" .. (i+1))
+        end
+    end
+    
+    -- Move main to bak1
+    if fs.exists(mainFile .. ".bak1") then fs.delete(mainFile .. ".bak1") end
+    fs.move(mainFile, mainFile .. ".bak1")
+end
+
+-- Main Loop
+while true do
+    local id, message = rednet.receive("cloud_disk")
+    
+    if type(message) == "table" and message.action then
+        local action = message.action
+        local user = message.username
+        local pass = message.password
+
+        if action == "register" then
+            if accounts[user] then
+                rednet.send(id, {success = false, error = "User already exists"}, "cloud_disk")
+            else
+                accounts[user] = pass
+                saveAccounts()
+                local _, _, drives = getStorageStats()
+                fs.makeDir(drives[1] .. "/user_" .. user)
+                rednet.send(id, {success = true, msg = "Registered successfully"}, "cloud_disk")
+            end
+
+        elseif accounts[user] and accounts[user] == pass then
+            local freeSpace, totalSpace = getStorageStats()
+            local userUsed = getUserUsedSpace(user)
+            
+            if action == "list" then
+                local own, shared = getUserFiles(user)
+                rednet.send(id, {
+                    success = true, 
+                    files = own, 
+                    shared = shared,
+                    used = userUsed, 
+                    quota = MAX_USER_QUOTA,
+                    serverFree = freeSpace
+                }, "cloud_disk")
+
+            elseif action == "upload" then
+                local fileSize = string.len(message.content)
+                
+                -- Check Personal Quota
+                if (userUsed + fileSize) > MAX_USER_QUOTA then
+                    rednet.send(id, {success = false, error = "Quota exceeded! Delete some files."}, "cloud_disk")
+                else
+                    local targetDrive = findDriveWithSpace(fileSize)
+                    if targetDrive then
+                        local userFolder = targetDrive .. "/user_" .. user
+                        fs.makeDir(userFolder)
+                        
+                        -- Version Control (Backup) Rotation
+                        rotateBackups(userFolder, message.filename)
+                        
+                        local file = fs.open(userFolder .. "/" .. message.filename, "w")
+                        file.write(message.content)
+                        file.close()
+                        rednet.send(id, {success = true, msg = "Uploaded (Backup Version Created)"}, "cloud_disk")
+                    else
+                        rednet.send(id, {success = false, error = "Out of server hardware space!"}, "cloud_disk")
+                    end
+                end
+
+            elseif action == "download" then
+                local filePath = nil
+                -- Handle downloading shared file format "shared:owner:filename"
+                if string.sub(message.filename, 1, 7) == "shared:" then
+                    local shareKey = string.sub(message.filename, 8)
+                    -- Verify access
+                    if shares[shareKey] then
+                        local owner, fname = string.match(shareKey, "([^:]+):(.+)")
+                        filePath = findUserFile(owner, fname)
+                    end
+                else
+                    filePath = findUserFile(user, message.filename)
+                end
+
+                if filePath and fs.exists(filePath) then
+                    local file = fs.open(filePath, "r")
+                    local content = file.readAll()
+                    file.close()
+                    rednet.send(id, {success = true, content = content}, "cloud_disk")
+                else
+                    rednet.send(id, {success = false, error = "File not found or no access permission"}, "cloud_disk")
+                end
+
+            elseif action == "delete" then
+                local filePath = findUserFile(user, message.filename)
+                if filePath then
+                    fs.delete(filePath)
+                    -- Clean up any associated backups
+                    for b = 1, MAX_BACKUPS do
+                        if fs.exists(filePath .. ".bak" .. b) then fs.delete(filePath .. ".bak" .. b) end
+                    end
+                    rednet.send(id, {success = true, msg = "Deleted file and backups"}, "cloud_disk")
+                else
+                    rednet.send(id, {success = false, error = "File not found"}, "cloud_disk")
+                end
+
+            elseif action == "share" then
+                local targetUser = message.target
+                local fname = message.filename
+                if not accounts[targetUser] then
+                    rednet.send(id, {success = false, error = "Target user does not exist"}, "cloud_disk")
+                else
+                    local path = findUserFile(user, fname)
+                    if not path then
+                        rednet.send(id, {success = false, error = "File not found"}, "cloud_disk")
+                    else
+                        local shareKey = user .. ":" .. fname
+                        if not shares[shareKey] then shares[shareKey] = {} end
+                        table.insert(shares[shareKey], targetUser)
+                        saveShares()
+                        rednet.send(id, {success = true, msg = "Shared with " .. targetUser}, "cloud_disk")
+                    end
+                end
+
+            elseif action == "history" then
+                local path, folder = findUserFile(user, message.filename)
+                local availableBaks = {}
+                if path then
+                    for b = 1, MAX_BACKUPS do
+                        if fs.exists(path .. ".bak" .. b) then
+                            table.insert(availableBaks, "v" .. b .. " (" .. fs.getSize(path .. ".bak" .. b) .. " bytes)")
+                        end
+                    end
+                end
+                rednet.send(id, {success = true, backups = availableBaks}, "cloud_disk")
+
+            elseif action == "restore" then
+                local path, folder = findUserFile(user, message.filename)
+                local bakPath = path .. ".bak" .. message.version
+                if path and fs.exists(bakPath) then
+                    fs.delete(path)
+                    fs.copy(bakPath, path)
+                    rednet.send(id, {success = true, msg = "Restored version successfully!"}, "cloud_disk")
+                else
+                    rednet.send(id, {success = false, error = "Backup version not found"}, "cloud_disk")
+                end
+            end
+        else
+            rednet.send(id, {success = false, error = "Invalid credentials"}, "cloud_disk")
+        end
+    end
+end
