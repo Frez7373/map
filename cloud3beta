@@ -1,0 +1,126 @@
+-- CLIENT CODE WITH MEMORY DISPLAY
+local MODEM_SIDE = "top" -- Change to your modem side
+
+rednet.open(MODEM_SIDE)
+local serverID = rednet.lookup("cloud_disk", "main_server")
+
+if not serverID then
+    print("Error: Cloud Server not found!")
+    return
+end
+
+print("Connected to Multi-Drive Cloud Server (ID: " .. serverID .. ")")
+
+write("Username: ")
+local username = read()
+write("Password: ")
+local password = read("*")
+
+local function sendRequest(payload)
+    payload.username = username
+    payload.password = password
+    rednet.send(serverID, payload, "cloud_disk")
+    
+    local id, response = rednet.receive("cloud_disk", 5)
+    return response
+end
+
+-- Helper to format bytes into readable KB
+local function formatSpace(bytes)
+    if not bytes then return "0 KB" end
+    return string.format("%.2f KB", bytes / 1024)
+end
+
+local function displayStatus()
+    local res = sendRequest({action = "list"})
+    if res and res.success then
+        term.clear()
+        term.setCursorPos(1,1)
+        print("=== MC Cloud Disk Console ===")
+        print("User: " .. username)
+        print("Your Cloud Usage: " .. formatSpace(res.used))
+        print("Total Server Free Space: " .. formatSpace(res.serverFree))
+        print("=============================")
+        print("\nYour Files:")
+        if #res.files == 0 then
+            print("  (cloud is empty)")
+        else
+            for _, name in ipairs(res.files) do
+                print("  - " .. name)
+            end
+        end
+        print("=============================")
+    else
+        print("Error fetching storage updates.")
+    end
+end
+
+local function printHelp()
+    print("\nCommands: register | upload <file> | download <file> | delete <file> | refresh | exit")
+end
+
+-- Initial fetch
+displayStatus()
+printHelp()
+
+while true do
+    write("\n" .. username .. "@cloud> ")
+    local input = read()
+    local parts = {}
+    for word in input:gmatch("%S+") do table.insert(parts, word) end
+    
+    local command = parts[1]
+    local argument = parts[2]
+
+    if command == "exit" then
+        break
+    elseif command == "register" then
+        local res = sendRequest({action = "register"})
+        if res then print(res.success and res.msg or "Error: " .. res.error) end
+
+    elseif command == "refresh" then
+        displayStatus()
+
+    elseif command == "upload" then
+        if not argument then print("Usage: upload <filename>")
+        elseif not fs.exists(argument) or fs.isDir(argument) then print("Local file does not exist.")
+        else
+            local file = fs.open(argument, "r")
+            local content = file.readAll()
+            file.close()
+
+            local res = sendRequest({action = "upload", filename = argument, content = content})
+            if res then 
+                print(res.success and res.msg or "Error: " .. res.error)
+                if res.success then sleep(1) displayStatus() end
+            end
+        end
+
+    elseif command == "download" then
+        if not argument then print("Usage: download <filename>")
+        else
+            local res = sendRequest({action = "download", filename = argument})
+            if res and res.success then
+                local file = fs.open(argument, "w")
+                file.write(res.content)
+                file.close()
+                print("Downloaded successfully.")
+            elseif res then
+                print("Error: " .. res.error)
+            end
+        end
+
+    elseif command == "delete" then
+        if not argument then print("Usage: delete <filename>")
+        else
+            local res = sendRequest({action = "delete", filename = argument})
+            if res then 
+                print(res.success and res.msg or "Error: " .. res.error)
+                if res.success then sleep(1) displayStatus() end
+            end
+        end
+    else
+        print("Unknown command.")
+        printHelp()
+    end
+end
