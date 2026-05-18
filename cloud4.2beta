@@ -1,0 +1,206 @@
+-- ADVANCED CLEAN CLIENT WITH SHARING, BACKUPS, QUOTAS AND SEARCH
+local MODEM_SIDE = "top"
+
+rednet.open(MODEM_SIDE)
+local serverID = rednet.lookup("cloud_disk", "main_server")
+
+if not serverID then
+    print("Error: Cloud Server not found!")
+    return
+end
+
+print("Connected to Cloud Enterprise Server (ID: " .. serverID .. ")")
+
+write("Username: ")
+local username = read()
+write("Password: ")
+local password = read("*")
+
+local function sendRequest(payload)
+    payload.username = username
+    payload.password = password
+    rednet.send(serverID, payload, "cloud_disk")
+    local _, response = rednet.receive("cloud_disk", 5)
+    return response
+end
+
+local function formatSpace(bytes)
+    if not bytes or bytes == 0 then return "0.00 B" end
+    if bytes < 1024 then return bytes .. " Bytes" end
+    return string.format("%.2f KB", bytes / 1024)
+end
+
+local function displayStatus(searchQuery)
+    local res = sendRequest({action = "list"})
+    if res and res.success then
+        term.clear()
+        term.setCursorPos(1,1)
+        print("=== MC Google Drive Console ===")
+        print("User: " .. username)
+        print("Your Storage Usage: " .. formatSpace(res.used) .. " / " .. formatSpace(res.quota))
+        print("Server Hardware Free: " .. formatSpace(res.serverFree))
+        print("===============================")
+        
+        if searchQuery then
+            print("Search filter: '" .. searchQuery .. "'")
+        end
+        
+        print("\n[Your Personal Files]:")
+        local ownCount = 0
+        for i = 1, #res.files do
+            local name = res.files[i]
+            if not searchQuery or string.find(string.lower(name), string.lower(searchQuery)) then
+                print("  - " .. name)
+                ownCount = ownCount + 1
+            end
+        end
+        if ownCount == 0 then print("  (no personal files found)") end
+        
+        print("\n[Shared With You]:")
+        local shareCount = 0
+        if res.shared then
+            for i = 1, #res.shared do
+                local fullShareName = res.shared[i]
+                if not searchQuery or string.find(string.lower(fullShareName), string.lower(searchQuery)) then
+                    print("  * " .. fullShareName)
+                    shareCount = shareCount + 1
+                end
+            end
+        end
+        if shareCount == 0 then print("  (no shared files found)") end
+        print("===============================")
+    else
+        print("Error fetching storage updates.")
+    end
+end
+
+local function printHelp()
+    print("\nCommands:")
+    print("upload <file>         | download <file>  | delete <file>")
+    print("share <file> <user>   | search <text>    | clearsearch")
+    print("history <file>        | restore <file> <v_num>")
+    print("refresh               | exit")
+end
+
+local currentSearch = nil
+displayStatus(currentSearch)
+printHelp()
+
+while true do
+    write("\n" .. username .. "@cloud> ")
+    local input = read()
+    local parts = {}
+    for word in input:gmatch("%S+") do table.insert(parts, word) end
+    
+    local command = parts[1]
+    if not command then command = "" end
+
+    if command == "exit" then
+        break
+        
+    elseif command == "register" then
+        local res = sendRequest({action = "register"})
+        if res then print(res.success and res.msg or "Error: " .. res.error) end
+
+    elseif command == "refresh" then
+        displayStatus(currentSearch)
+
+    elseif command == "search" then
+        if not parts[2] then print("Usage: search <text>")
+        else
+            currentSearch = parts[2]
+            displayStatus(currentSearch)
+        end
+
+    elseif command == "clearsearch" then
+        currentSearch = nil
+        displayStatus(currentSearch)
+
+    elseif command == "upload" then
+        local argument = parts[2]
+        if not argument then print("Usage: upload <filename>")
+        elseif not fs.exists(argument) or fs.isDir(argument) then print("Local file does not exist.")
+        else
+            local file = fs.open(argument, "r")
+            local content = file.readAll()
+            file.close()
+
+            local res = sendRequest({action = "upload", filename = argument, content = content})
+            if res then 
+                print(res.success and res.msg or "Error: " .. res.error)
+                if res.success then sleep(1) displayStatus(currentSearch) end
+            end
+        end
+
+    elseif command == "download" then
+        local argument = parts[2]
+        if not argument then print("Usage: download <filename>")
+        else
+            local res = sendRequest({action = "download", filename = argument})
+            if res and res.success then
+                local cleanName = argument
+                if string.sub(argument, 1, 7) == "shared:" then
+                    cleanName = string.match(argument, "([^:]+)$")
+                end
+                
+                local file = fs.open(cleanName, "w")
+                file.write(res.content)
+                file.close()
+                print("Downloaded successfully saved as: " .. cleanName)
+            elseif res then
+                print("Error: " .. res.error)
+            end
+        end
+
+    elseif command == "delete" then
+        local argument = parts[2]
+        if not argument then print("Usage: delete <filename>")
+        else
+            local res = sendRequest({action = "delete", filename = argument})
+            if res then 
+                print(res.success and res.msg or "Error: " .. res.error)
+                if res.success then sleep(1) displayStatus(currentSearch) end
+            end
+        end
+
+    elseif command == "share" then
+        local fileToShare = parts[2]
+        local targetUser = parts[3]
+        if not fileToShare or not targetUser then
+            print("Usage: share <filename> <target_username>")
+        else
+            local res = sendRequest({action = "share", filename = fileToShare, target = targetUser})
+            if res then print(res.success and res.msg or "Error: " .. res.error) end
+        end
+
+    elseif command == "history" then
+        local argument = parts[2]
+        if not argument then print("Usage: history <filename>")
+        else
+            local res = sendRequest({action = "history", filename = argument})
+            if res and res.success then
+                print("--- Backup History for " .. argument .. " ---")
+                for i = 1, #res.backups do
+                    print(" Version " .. res.backups[i])
+                end
+                if #res.backups == 0 then print("No backups found for this file.") end
+            end
+        end
+
+    elseif command == "restore" then
+        local filename = parts[2]
+        local version = tonumber(parts[3])
+        if not filename or not version then
+            print("Usage: restore <filename> <version_number>")
+        else
+            local res = sendRequest({action = "restore", filename = filename, version = version})
+            if res then 
+                print(res.success and res.msg or "Error: " .. res.error)
+                if res.success then sleep(1) displayStatus(currentSearch) end
+            end
+        end
+    else
+        print("Unknown command.")
+        printHelp()
+    end
+end
