@@ -1,0 +1,192 @@
+-- SERVER CODE WITH MULTI-DRIVE STORAGE & SIZE CHECKS
+local MODEM_SIDE = "top" -- Change to your modem side
+local ACCOUNTS_FILE = "accounts.txt"
+
+rednet.open(MODEM_SIDE)
+rednet.host("cloud_disk", "main_server")
+print("[-] Advanced Cloud Server started...")
+
+-- Load accounts
+local accounts = {}
+if fs.exists(ACCOUNTS_FILE) then
+    local file = fs.open(ACCOUNTS_FILE, "r")
+    accounts = textutils.unserialize(file.readAll()) or {}
+    file.close()
+else
+    local file = fs.open(ACCOUNTS_FILE, "w")
+    file.write(textutils.serialize(accounts))
+    file.close()
+end
+
+local function saveAccounts()
+    local file = fs.open(ACCOUNTS_FILE, "w")
+    file.write(textutils.serialize(accounts))
+    file.close()
+end
+
+-- Get storage stats across all connected disk drives
+local function getStorageStats()
+    local totalFree = 0
+    local totalCapacity = 0
+    local drives = {}
+    
+    local peripherals = peripheral.getNames()
+    for _, name in ipairs(peripherals) do
+        if peripheral.getType(name) == "drive" and disk.isPresent(name) then
+            local path = disk.getMountPath(name)
+            if path then
+                table.insert(drives, path)
+                totalFree = totalFree + fs.getFreeSpace(path)
+                -- Capacity estimation fallback if not directly supported by older CC
+                totalCapacity = totalCapacity + (fs.getFreeSpace(path) + fs.getDriveSize(path))
+            end
+        end
+    end
+    
+    -- Fallback to local storage if no drives attached
+    if #drives == 0 then
+        totalFree = fs.getFreeSpace("cloud_storage")
+        totalCapacity = totalFree -- local storage capacity
+        table.insert(drives, "cloud_storage")
+    end
+    
+    return totalFree, totalCapacity, drives
+end
+
+-- Find a drive that has enough space for a file size
+local function findDriveWithSpace(requiredSpace)
+    local _, _, drives = getStorageStats()
+    for _, drivePath do
+        if fs.getFreeSpace(drivePath) >= requiredSpace then
+            return drivePath
+        end
+    end
+    return nil
+end
+
+-- Locate where a user's file is stored (checks all drives)
+local function findUserFile(username, filename)
+    local _, _, drives = getStorageStats()
+    for _, drivePath do
+        local fullPath = drivePath .. "/user_" .. username .. "/" .. filename
+        if fs.exists(fullPath) then
+            return fullPath
+        end
+    end
+    return nil
+end
+
+-- Calculate total space used by a specific user across all drives
+local function getUserUsedSpace(username)
+    local totalUsed = 0
+    local _, _, drives = getStorageStats()
+    for _, drivePath do
+        local userFolder = drivePath .. "/user_" .. username
+        if fs.exists(userFolder) and fs.isDir(userFolder) then
+            local files = fs.list(userFolder)
+            for _, f in ipairs(files) do
+                totalUsed = totalUsed + fs.getSize(userFolder .. "/" .. f)
+            end
+        end
+    end
+    return totalUsed
+end
+
+-- Gather all filenames for a specific user across all drives
+local function getUserFiles(username)
+    local allFiles = {}
+    local _, _, drives = getStorageStats()
+    for _, drivePath do
+        local userFolder = drivePath .. "/user_" .. username
+        if fs.exists(userFolder) and fs.isDir(userFolder) then
+            local files = fs.list(userFolder)
+            for _, f in ipairs(files) do
+                table.insert(allFiles, f)
+            end
+        end
+    end
+    return allFiles
+end
+
+-- Main Loop
+while true do
+    local id, message = rednet.receive("cloud_disk")
+    
+    if type(message) == "table" and message.action then
+        local action = message.action
+        local user = message.username
+        local pass = message.password
+
+        print("[+] Request: " .. action .. " from: " .. tostring(user))
+
+        if action == "register" then
+            if accounts[user] then
+                rednet.send(id, {success = false, error = "User already exists"}, "cloud_disk")
+            else
+                accounts[user] = pass
+                saveAccounts()
+                -- Create initial folder on the first available drive
+                local _, _, drives = getStorageStats()
+                fs.makeDir(drives[1] .. "/user_" .. user)
+                rednet.send(id, {success = true, msg = "Registered successfully"}, "cloud_disk")
+            end
+
+        elseif accounts[user] and accounts[user] == pass then
+            local freeSpace, totalSpace = getStorageStats()
+            
+            if action == "list" then
+                local userFiles = getUserFiles(user)
+                local usedSpace = getUserUsedSpace(user)
+                rednet.send(id, {
+                    success = true, 
+                    files = userFiles, 
+                    used = usedSpace, 
+                    serverFree = freeSpace
+                }, "cloud_disk")
+
+            elseif action == "upload" then
+                local fileSize = #message.content
+                local targetDrive = findDriveWithSpace(fileSize)
+                
+                if targetDrive then
+                    -- Ensure folder exists on that target drive
+                    local userFolder = targetDrive .. "/user_" .. user
+                    fs.makeDir(userFolder)
+                    
+                    -- If file already exists elsewhere, delete it first to prevent duplicates
+                    local existingPath = findUserFile(user, message.filename)
+                    if existingPath then fs.delete(existingPath) end
+                    
+                    local file = fs.open(userFolder .. "/" .. message.filename, "w")
+                    file.write(message.content)
+                    file.close()
+                    rednet.send(id, {success = true, msg = "Uploaded successfully"}, "cloud_disk")
+                else
+                    rednet.send(id, {success = false, error = "Out of server storage space!"}, "cloud_disk")
+                end
+
+            elseif action == "download" then
+                local filePath = findUserFile(user, message.filename)
+                if filePath then
+                    local file = fs.open(filePath, "r")
+                    local content = file.readAll()
+                    file.close()
+                    rednet.send(id, {success = true, content = content}, "cloud_disk")
+                else
+                    rednet.send(id, {success = false, error = "File not found"}, "cloud_disk")
+                end
+
+            elseif action == "delete" then
+                local filePath = findUserFile(user, message.filename)
+                if filePath then
+                    fs.delete(filePath)
+                    rednet.send(id, {success = true, msg = "Deleted successfully"}, "cloud_disk")
+                else
+                    rednet.send(id, {success = false, error = "File not found"}, "cloud_disk")
+                end
+            end
+        else
+            rednet.send(id, {success = false, error = "Invalid credentials"}, "cloud_disk")
+        end
+    end
+end
