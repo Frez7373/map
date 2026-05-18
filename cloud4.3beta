@@ -1,0 +1,136 @@
+-- LINE 1
+-- LINE 2
+-- LINE 3
+-- LINE 4
+-- LINE 5
+-- LINE 6
+local MODEM_SIDE = "top"
+local protocol = "cloud_disk"
+
+rednet.open(MODEM_SIDE)
+local serverID = rednet.lookup(protocol, "main_server")
+
+if not serverID then
+    print("Error: Server not found!")
+    return
+end
+
+print("Connected to Server ID: " .. serverID)
+write("Username: ")
+local username = read()
+write("Password: ")
+local password = read("*")
+
+local function sendRequest(payload)
+    payload.username = username
+    payload.password = password
+    rednet.send(serverID, payload, protocol)
+    local _, response = rednet.receive(protocol, 5)
+    return response
+end
+
+local function formatSpace(bytes)
+    if not bytes or bytes == 0 then return "0 B" end
+    if bytes < 1024 then return bytes .. " B" end
+    return string.format("%.2f KB", bytes / 1024)
+end
+
+local function displayStatus(filter)
+    local res = sendRequest({action = "list"})
+    if res and res.success then
+        term.clear()
+        term.setCursorPos(1, 1)
+        print("=== MC Google Drive ===")
+        print("User: " .. username)
+        print("Usage: " .. formatSpace(res.used) .. " / " .. formatSpace(res.quota))
+        print("Server Free: " .. formatSpace(res.serverFree))
+        print("=======================")
+        
+        print("\n[Your Files]:")
+        for i = 1, #res.files do
+            local name = res.files[i]
+            if not filter or string.find(string.lower(name), string.lower(filter), 1, true) then
+                print("  - " .. name)
+            end
+        end
+        
+        print("\n[Shared With You]:")
+        if res.shared then
+            for i = 1, #res.shared do
+                local name = res.shared[i]
+                if not filter or string.find(string.lower(name), string.lower(filter), 1, true) then
+                    print("  * " .. name)
+                end
+            end
+        end
+    else
+        print("Connection error.")
+    end
+end
+
+-- Main loop
+displayStatus()
+while true do
+    write("\n" .. username .. "@cloud> ")
+    local input = read()
+    local parts = {}
+    for word in string.gmatch(input, "%S+") do
+        table.insert(parts, word)
+    end
+    
+    local cmd = parts[1] or ""
+    local arg1 = parts[2]
+    local arg2 = parts[3]
+
+    if cmd == "exit" then
+        break
+    elseif cmd == "refresh" then
+        displayStatus()
+    elseif cmd == "search" then
+        displayStatus(arg1)
+    elseif cmd == "upload" and arg1 then
+        if fs.exists(arg1) and not fs.isDir(arg1) then
+            local file = fs.open(arg1, "r")
+            local content = file.readAll()
+            file.close()
+            local res = sendRequest({action = "upload", filename = arg1, content = content})
+            if res then print(res.msg or res.error) end
+            os.sleep(1)
+            displayStatus()
+        else
+            print("File not found.")
+        end
+    elseif cmd == "download" and arg1 then
+        local res = sendRequest({action = "download", filename = arg1})
+        if res and res.success then
+            local clean = arg1
+            if string.sub(arg1, 1, 7) == "shared:" then
+                clean = string.match(arg1, "([^:]+)$") or arg1
+            end
+            local file = fs.open(clean, "w")
+            file.write(res.content)
+            file.close()
+            print("Saved as " .. clean)
+        else
+            print(res and res.error or "Error")
+        end
+    elseif cmd == "delete" and arg1 then
+        local res = sendRequest({action = "delete", filename = arg1})
+        if res then print(res.msg or res.error) end
+        os.sleep(1)
+        displayStatus()
+    elseif cmd == "share" and arg1 and arg2 then
+        local res = sendRequest({action = "share", filename = arg1, target = arg2})
+        if res then print(res.msg or res.error) end
+    elseif cmd == "history" and arg1 then
+        local res = sendRequest({action = "history", filename = arg1})
+        if res and res.backups then
+            for i = 1, #res.backups do print(" " .. res.backups[i]) end
+        end
+    elseif cmd == "restore" and arg1 and arg2 then
+        local res = sendRequest({action = "restore", filename = arg1, version = tonumber(arg2)})
+        if res then print(res.msg or res.error) end
+        os.sleep(1)
+        displayStatus()
+    end
+end
