@@ -1,0 +1,110 @@
+-- Настройки цветов для цветных компьютеров (Advanced Computer)
+-- Если компьютер обычный (черно-белый), цвета автоматически станут серыми/белыми
+local termColor = term.isColor()
+local COLOR_BG = termColor and colors.black or colors.black
+local COLOR_TEXT = termColor and colors.lightGray or colors.white
+local COLOR_FRAME = termColor and colors.green or colors.white
+local COLOR_ALERT = termColor and colors.red or colors.white
+local COLOR_WARN = termColor and colors.yellow or colors.white
+
+term.setBackgroundColor(COLOR_BG)
+term.setTextColor(COLOR_TEXT)
+term.clear()
+
+local w, h = term.getSize()
+
+-- Функция отрисовки рамки интерфейса
+local function drawFrame()
+    term.setTextColor(COLOR_FRAME)
+    
+    -- Верхняя и нижняя линии
+    term.setCursorPos(1, 1)
+    write(string.rep("=", w))
+    term.setCursorPos(1, h)
+    write(string.rep("=", w))
+    
+    -- Боковые границы
+    for i = 2, h - 1 do
+        term.setCursorPos(1, i)
+        write("|")
+        term.setCursorPos(w, i)
+        write("|")
+    end
+    
+    -- Заголовок
+    term.setCursorPos(4, 1)
+    write(" [ BUNKER MANAGEMENT SYSTEM v2.6 ] ")
+end
+
+-- Получение времени мира Minecraft в CC: Tweaked
+local function getMinecraftTime()
+    local totalTicks = os.time() * 1000 -- CC: Tweaked os.time() возвращает время в часах (от 0.000 до 23.999)
+    local hour = math.floor(os.time())
+    local minute = math.floor((os.time() - hour) * 60)
+    
+    -- Получаем игровой день (в CC: Tweaked для этого есть os.day())
+    local day = os.day()
+    
+    return string.format("Day: %d | Time: %02d:%02d", day, hour, minute)
+end
+
+drawFrame()
+
+-- Главный цикл обновления
+while true do
+    -- 1. TIME & SYNCHRONIZATION
+    term.setTextColor(COLOR_FRAME)
+    term.setCursorPos(4, 3)
+    write("TIME & SYNCHRONIZATION:")
+    term.setTextColor(COLOR_TEXT)
+    term.setCursorPos(4, 4)
+    write(getMinecraftTime() .. "    ")
+
+    -- 2. POWER SUPPLY STATUS
+    term.setTextColor(COLOR_FRAME)
+    term.setCursorPos(4, 6)
+    write("POWER SUPPLY:")
+    
+    -- Так как в CC: Tweaked компьютер не потребляет внутреннюю энергию для работы,
+    -- мы симулируем стабильный генератор бункера (или ты можешь подключить реальную батарею справа/слева)
+    term.setTextColor(COLOR_FRAME)
+    term.setCursorPos(4, 7)
+    write("OS Core: [████████████████████] 100%  ")
+
+    -- 3. PERIMETER SECURITY
+    term.setTextColor(COLOR_FRAME)
+    term.setCursorPos(4, 9)
+    write("PERIMETER SECURITY & AIRLOCKS:")
+    
+    -- Проверяем редстоун сигнал со ВСЕХ сторон компьютера
+    local secureStatus = true
+    local sides = {"top", "bottom", "left", "right", "front", "back"}
+    for _, side in ip Bedrock or redstone do
+        if rs.getInput(side) then
+            secureStatus = false
+            break
+        end
+    end
+    
+    term.setCursorPos(4, 10)
+    if secureStatus then
+        term.setTextColor(colors.green)
+        write("Status: PERIMETER SECURED [OK]          ")
+    else
+        term.setTextColor(COLOR_ALERT)
+        write("WARNING: MOTION DETECTED / GATE OPEN   ")
+    end
+
+    -- 4. LIFE SUPPORT SYSTEM
+    term.setTextColor(COLOR_FRAME)
+    term.setCursorPos(4, 12)
+    write("LIFE SUPPORT & FILTERS:")
+    term.setTextColor(COLOR_TEXT)
+    term.setCursorPos(4, 13)
+    write("Ventilation: RECIRCULATION [100%]")
+    term.setCursorPos(4, 14)
+    write("Radiation Level: STABLE (12 mcR/h)")
+
+    -- В CC: Tweaked используется встроенная функция sleep()
+    sleep(1)
+end
