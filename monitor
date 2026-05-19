@@ -1,0 +1,119 @@
+local component = require("component")
+local term = require("term")
+local os = require("os")
+local gpu = component.gpu
+
+-- Attempt to connect components
+local computer_comp = component.isAvailable("computer") and component.computer
+local redstone = component.isAvailable("redstone") and component.redstone
+
+-- Color configuration (HEX format for advanced GPUs)
+local COLOR_BG = 0x0F0F0F       -- Dark bunker background
+local COLOR_TEXT = 0xCCCCCC     -- Standard gray text
+local COLOR_FRAME = 0x00FF00    -- Classic terminal green
+local COLOR_ALERT = 0xFF0000    -- Alert red
+local COLOR_WARN = 0xFFFF00     -- Warning yellow
+
+-- Clear screen and prepare
+gpu.setBackground(COLOR_BG)
+gpu.setForeground(COLOR_TEXT)
+term.clear()
+
+local w, h = gpu.getResolution()
+
+-- Function to draw the interface frame
+local function drawFrame()
+    gpu.setForeground(COLOR_FRAME)
+    -- Top and bottom lines
+    gpu.fill(1, 1, w, 1, "═")
+    gpu.fill(1, h, w, 1, "═")
+    -- Side borders
+    gpu.fill(1, 2, 1, h - 2, "║")
+    gpu.fill(w, 2, 1, h - 2, "║")
+    -- Corners
+    gpu.set(1, 1, "╔")
+    gpu.set(w, 1, "╗")
+    gpu.set(1, h, "╚")
+    gpu.set(w, h, "╝")
+    
+    -- Main Title
+    gpu.set(4, 1, " [ BUNKER MANAGEMENT SYSTEM v2.6 ] ")
+end
+
+-- Convert Minecraft world ticks to readable format
+local function getMinecraftTime()
+    local totalTicks = os.time() -- Returns in-game world ticks
+    local day = math.floor(totalTicks / 24000) + 1
+    
+    -- Calculate hours and minutes (Minecraft day starts at 06:00)
+    local hour = math.floor((totalTicks % 24000) / 1000) + 6
+    if hour >= 24 then hour = hour - 24 end
+    local minute = math.floor(((totalTicks % 24000) % 1000) * 60 / 1000)
+    
+    return string.format("Day: %d | Time: %02d:%02d", day, hour, minute)
+end
+
+-- Initial frame draw
+drawFrame()
+
+-- Main update loop
+while true do
+    -- 1. TIME & SYNCHRONIZATION
+    gpu.setForeground(COLOR_FRAME)
+    gpu.set(4, 3, "TIME & SYNCHRONIZATION:")
+    gpu.setForeground(COLOR_TEXT)
+    gpu.set(4, 4, getMinecraftTime() .. "    ") -- Spaces clear old digits
+
+    -- 2. POWER SUPPLY STATUS
+    gpu.setForeground(COLOR_FRAME)
+    gpu.set(4, 6, "POWER SUPPLY:")
+    
+    local energy = computer_comp and computer_comp.energy() or 0
+    local maxEnergy = computer_comp and computer_comp.maxEnergy() or 1
+    local energyPercent = (energy / maxEnergy) * 100
+    
+    if energyPercent < 20 then
+        gpu.setForeground(COLOR_ALERT)
+    elseif energyPercent < 50 then
+        gpu.setForeground(COLOR_WARN)
+    else
+        gpu.setForeground(0x00FF00)
+    end
+    
+    local progressBars = math.floor(energyPercent / 5)
+    local barStr = string.rep("█", progressBars) .. string.rep("░", 20 - progressBars)
+    gpu.set(4, 7, string.format("OS Core: [%s] %.1f%%  ", barStr, energyPercent))
+
+    -- 3. PERIMETER SECURITY
+    gpu.setForeground(COLOR_FRAME)
+    gpu.set(4, 9, "PERIMETER SECURITY & AIRLOCKS:")
+    
+    -- Checks all sides for Redstone input (e.g., pressure plates, motion sensors)
+    local secureStatus = true
+    if redstone then
+        for side = 0, 5 do
+            if redstone.getInput(side) > 0 then
+                secureStatus = false
+                break
+            end
+        end
+    end
+    
+    if secureStatus then
+        gpu.setForeground(0x00FF00)
+        gpu.set(4, 10, "Status: PERIMETER SECURED [OK]          ")
+    else
+        gpu.setForeground(COLOR_ALERT)
+        gpu.set(4, 10, "WARNING: MOTION DETECTED / GATE OPEN   ")
+    end
+
+    -- 4. LIFE SUPPORT SYSTEM
+    gpu.setForeground(COLOR_FRAME)
+    gpu.set(4, 12, "LIFE SUPPORT & FILTERS:")
+    gpu.setForeground(COLOR_TEXT)
+    gpu.set(4, 13, "Ventilation: RECIRCULATION [100%]")
+    gpu.set(4, 14, "Radiation Level: STABLE (12 mcR/h)")
+
+    -- Prevent server lag with a short sleep interval
+    os.sleep(1)
+end
